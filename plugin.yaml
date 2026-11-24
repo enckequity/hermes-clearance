@@ -43,6 +43,11 @@ config_schema:
     default: owner
     label: "Tier for Hermes admins"
     description: "Senders Hermes already lists in allow_admin_from (DM chats) or group_allow_admin_from (group chats) get this tier automatically, so the bot owner is never locked out as a guest. An entry in User tiers still wins. Set to 'off' to disable."
+  platform_tiers:
+    type: dict
+    default: {}
+    label: "Tier per platform"
+    description: "Tier for a platform's senders that User tiers, admin lists and the home channel do not name, including turns on that platform without a sender id, e.g. {\"api_server\": \"owner\"} for an authenticated private API. /clearance set never writes it, so an administrator can pin it."
   home_channel_tier:
     type: str
     default: ""

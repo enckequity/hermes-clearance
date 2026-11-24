@@ -64,7 +64,9 @@ Who gets which tier:
   to be local and gets `default_tier`.
 - **Cron jobs** and **Kanban workers** → `cron_tier` (`owner`). Only tiers that may use `cronjob_manage` can create them.
 - A gateway turn **without a sender id** is never guessed: it gets `default_tier`, unless `users`
-  has a platform-wide entry for it (`"api_server:*": owner` for an authenticated private API).
+  has a platform-wide entry for it (`"api_server:*": owner`) or `platform_tiers` names its platform
+  (`{api_server: owner}` for an authenticated private API; `/clearance set` never writes this setting,
+  so an administrator can pin it).
 - **The home channel's person** → `home_channel_tier` (off by default) on the platforms listed in
   `home_channel_platforms`, so a workspace's owner is recognised from the home channel the operator set.
 

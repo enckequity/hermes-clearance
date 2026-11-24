@@ -113,6 +113,9 @@ class Policy:
     # keyed by platform: the ids that identify them. They get ``home_channel_tier`` unless ``users`` names them.
     home_channels: Mapping[str, frozenset[str]] = field(default_factory=dict)
     home_channel_tier: str = ""  # "" = off
+    # Tier per platform for its senders that nothing above names, anonymous ones included. Unlike ``users``
+    # it is never written by /clearance set, so an administrator can pin it without blocking tier changes.
+    platform_tiers: Mapping[str, str] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     # -------------------------------------------------------------- lookups
@@ -134,16 +137,19 @@ class Policy:
             # never the bare "*", so one wildcard cannot lift every anonymous turn.
             if ident.platform and f"{ident.platform}:*" in self.users:
                 return self.users[f"{ident.platform}:*"]
-            return self.default_tier
+            return self.platform_tiers.get(ident.platform, self.default_tier)
         if ident.key in self.users:  # an explicit per-user entry always wins
             return self.users[ident.key]
         if self.gateway_admin_tier and self.is_gateway_admin(ident):
             return self.gateway_admin_tier
         if self.home_channel_tier and self.is_home_channel_person(ident):
             return self.home_channel_tier
-        for key in (f"{ident.platform}:*", "*"):
-            if key in self.users:
-                return self.users[key]
+        if f"{ident.platform}:*" in self.users:
+            return self.users[f"{ident.platform}:*"]
+        if ident.platform in self.platform_tiers:
+            return self.platform_tiers[ident.platform]
+        if "*" in self.users:
+            return self.users["*"]
         return self.default_tier
 
     def is_gateway_admin(self, ident: Identity) -> bool:
@@ -352,8 +358,23 @@ def build_policy(
         except Exception as exc:  # unreadable gateway config: promote nobody (fail closed)
             warnings.append(f"could not read the gateway's home channels ({type(exc).__name__}); no home channel tier")
 
+    platform_tiers: dict[str, str] = {}
+    raw_platforms = get("platform_tiers", None)
+    if isinstance(raw_platforms, Mapping):
+        for k, v in raw_platforms.items():
+            platform, tier = str(k).strip().lower(), str(v or "").strip().lower()
+            if not platform or not tier:
+                continue
+            if tier not in tiers:
+                warnings.append(f"platform_tiers: {platform} has unknown tier {tier!r}; treated as guest")
+                tier = "guest"
+            platform_tiers[platform] = tier
+    elif raw_platforms not in (None, ""):
+        warnings.append("platform_tiers is not a mapping; ignored")
+
     return Policy(
         tiers=tiers,
+        platform_tiers=platform_tiers,
         users=users,
         default_tier=_tier_setting("default_tier", "guest"),
         local_tier=_tier_setting("local_tier", "owner"),

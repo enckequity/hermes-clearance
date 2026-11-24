@@ -114,6 +114,9 @@ class Commands:
                 platform, _, scope = scope_key.partition(":")
                 ids = ", ".join(f"{platform}:{i}" for i in sorted(policy.gateway_admins[scope_key]))
                 lines.append(f"  {scope} chats: {ids}")
+        if policy.platform_tiers:
+            lines.append("Platforms (senders not named above): " + ", ".join(
+                f"{k} -> {v}" for k, v in sorted(policy.platform_tiers.items())))
         if policy.home_channel_tier and policy.home_channels:
             platforms = ", ".join(sorted(policy.home_channels))
             lines.append(f"Home channel person ({platforms}) -> {policy.home_channel_tier} unless listed above.")

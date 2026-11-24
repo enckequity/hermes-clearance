@@ -420,3 +420,16 @@ def test_composio_group_grants_connected_app_tools():
     assert pol.decide(staff, "mcp__composio__GMAIL_SEND_EMAIL").allowed
     assert not pol.decide(staff, "mcp__github__create_issue").allowed
     assert not build_policy(_getter({"users": {"relay:+15550003": "user"}})).decide(staff, "mcp__composio__GMAIL_SEND_EMAIL").allowed
+
+
+def test_platform_tiers_cover_anonymous_and_unnamed_senders():
+    cfg = {"platform_tiers": {"api_server": "owner", "Webhook": "admin", "relay": "nope"},
+           "users": {"relay:+15550009": "user", "*": "blocked"}}
+    pol = build_policy(_getter(cfg))
+    assert pol.tier_name_for(make_identity("api_server", "")) == "owner"
+    assert pol.tier_name_for(make_identity("webhook", "webhook:mail")) == "admin"
+    assert pol.tier_name_for(make_identity("relay", "+15550009")) == "user"  # users wins
+    assert pol.tier_name_for(make_identity("relay", "+15550010")) == "guest"  # unknown tier name falls to guest
+    assert pol.tier_name_for(make_identity("telegram", "5")) == "blocked"  # "*" still applies elsewhere
+    assert pol.tier_name_for(make_identity("", "")) == "guest"
+    assert any("platform_tiers" in w for w in pol.warnings)
