@@ -22,12 +22,12 @@ config_schema:
     type: str
     default: guest
     label: "Tier for unassigned senders"
-    description: "Tier for anyone on a messaging platform or webhook who is not in User tiers, and for gateway turns without a sender id."
+    description: "Tier for anyone on a messaging platform or webhook who is not in User tiers, for gateway turns without a sender id, and for turns with no platform and no local session source. A platform-wide entry such as 'api_server:*' in User tiers covers that platform's turns without a sender id."
   local_tier:
     type: str
     default: owner
     label: "Tier for local sessions"
-    description: "CLI, TUI, Desktop and ACP sessions on this machine."
+    description: "CLI, TUI, Desktop and ACP sessions on this machine (the session's platform or source must name one). Kanban workers get the cron tier."
   cron_tier:
     type: str
     default: owner
@@ -43,6 +43,16 @@ config_schema:
     default: owner
     label: "Tier for Hermes admins"
     description: "Senders Hermes already lists in allow_admin_from (DM chats) or group_allow_admin_from (group chats) get this tier automatically, so the bot owner is never locked out as a guest. An entry in User tiers still wins. Set to 'off' to disable."
+  home_channel_tier:
+    type: str
+    default: ""
+    label: "Tier for the home channel's person"
+    description: "On the platforms in home_channel_platforms, the person at the configured home channel (platforms.<p>.home_channel: their user id is the home chat id or the user id recorded with it, or they write in a DM that is the home chat) gets this tier. An entry in User tiers still wins. Off when empty."
+  home_channel_platforms:
+    type: list
+    default: []
+    label: "Platforms whose home channel names the owner"
+    description: "Only list platforms where the home channel is set by the operator and changing it (/sethome) is admin-only."
   notify_model:
     type: bool
     default: true

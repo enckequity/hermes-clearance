@@ -38,6 +38,8 @@ def current_identity(env: Callable[[str], str] = session_env) -> Identity:
         env("HERMES_SESSION_USER_NAME"),
         cron=env("HERMES_CRON_SESSION") == "1",
         chat_type=env("HERMES_SESSION_CHAT_TYPE"),
+        source=env("HERMES_SESSION_SOURCE"),
+        chat_id=env("HERMES_SESSION_CHAT_ID"),
     )
 
 
@@ -76,6 +78,23 @@ def load_gateway_admins() -> dict[str, frozenset[str]]:
     return out
 
 
+def load_home_channels() -> dict[str, frozenset[str]]:
+    """Each platform's configured home channel (``platforms.<p>.home_channel``) as the ids naming its person:
+    the home chat id, plus the user id the gateway recorded with it when there is one."""
+    from gateway.config import load_gateway_config
+
+    out: dict[str, frozenset[str]] = {}
+    for platform, pconfig in (getattr(load_gateway_config(), "platforms", None) or {}).items():
+        name = str(getattr(platform, "value", platform) or "").strip().lower()
+        home = getattr(pconfig, "home_channel", None)
+        if not name or home is None:
+            continue
+        ids = {str(getattr(home, k, "") or "").strip() for k in ("chat_id", "user_id")} - {""}
+        if ids:
+            out[name] = frozenset(ids)
+    return out
+
+
 def default_audit_path() -> Path:
     from plugins.plugin_storage import plugin_data_dir
 
@@ -100,9 +119,11 @@ class Runtime:
         audit_path: Callable[[], Path] = default_audit_path,
         clock: Callable[[], float] = time.monotonic,
         gateway_admins: Callable[[], Mapping[str, Iterable[str]]] | None = load_gateway_admins,
+        home_channels: Callable[[], Mapping[str, Iterable[str]]] | None = load_home_channels,
     ) -> None:
         self._get_config = get_config
         self._gateway_admins = gateway_admins
+        self._home_channels = home_channels
         self._identity = identity
         self._clock = clock
         self._policy: tuple[float, Policy] | None = None
@@ -125,7 +146,7 @@ class Runtime:
         now = self._clock()
         with self._lock:
             if self._policy is None or now - self._policy[0] > _POLICY_TTL:
-                pol = build_policy(self.setting, self._gateway_admins)
+                pol = build_policy(self.setting, self._gateway_admins, self._home_channels)
                 for w in pol.warnings:
                     if w not in self._logged_warnings:
                         self._logged_warnings.add(w)

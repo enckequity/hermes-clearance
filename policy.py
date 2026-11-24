@@ -31,6 +31,9 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "@desktop": ("computer_use", "desktop_*", "focus_pane", "gui_tour", "set_theme", "show_tip",
                  "annotate_preview", "drive_preview", "read_window_below", "react_to_message"),
     "@chat": ("clarify", "todo_list"),
+    # Composio's connected apps (Gmail, Calendar, CRM, ...) act on the owner's own accounts. They are MCP tools
+    # (``mcp__composio__<tool>``); name the group, or single tools, to grant them to a restricted tier.
+    "@composio": ("mcp__composio__*",),
 }
 
 DEFAULT_TIERS: dict[str, dict[str, Any]] = {
@@ -46,7 +49,13 @@ DEFAULT_TIERS: dict[str, dict[str, Any]] = {
 DM_CHAT_TYPES = frozenset({"dm", "direct", "private"})
 
 # Platforms whose turns come from the machine itself (CLI, TUI, Desktop, ACP editors).
-LOCAL_PLATFORMS = frozenset({"", "cli", "tui", "desktop", "local", "acp"})
+LOCAL_PLATFORMS = frozenset({"cli", "tui", "desktop", "local", "acp"})
+# A turn with no platform at all is local only when its session source names one of these surfaces. A turn
+# with no platform, no source and no sender (an unlabelled call) is never guessed to be local: it gets
+# ``default_tier``, like a gateway turn without a sender id.
+LOCAL_SOURCES = LOCAL_PLATFORMS | {"oneshot"}
+# Automation that runs a task someone with board tools queued; it gets ``cron_tier``.
+AUTOMATION_SOURCES = frozenset({"kanban"})
 
 
 @dataclass(frozen=True)
@@ -74,6 +83,7 @@ class Identity:
     user_id: str = ""
     user_name: str = ""
     chat_type: str = ""  # "dm", "group", "channel", ... as the gateway reports it; "" when unknown
+    chat_id: str = ""
 
     def label(self) -> str:
         if self.user_name and self.kind == "gateway":
@@ -99,6 +109,10 @@ class Policy:
     # "platform:dm" / "platform:group". They get ``gateway_admin_tier`` unless ``users`` names them.
     gateway_admins: Mapping[str, frozenset[str]] = field(default_factory=dict)
     gateway_admin_tier: str = ""  # "" = off
+    # The person behind each listed platform's configured home channel (``platforms.<p>.home_channel``),
+    # keyed by platform: the ids that identify them. They get ``home_channel_tier`` unless ``users`` names them.
+    home_channels: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    home_channel_tier: str = ""  # "" = off
     warnings: list[str] = field(default_factory=list)
 
     # -------------------------------------------------------------- lookups
@@ -116,11 +130,17 @@ class Policy:
         if ident.kind == "cron":
             return self.cron_tier
         if ident.kind == "unknown":
+            # A turn without a sender id only matches an explicit platform-wide entry ("api_server:*"),
+            # never the bare "*", so one wildcard cannot lift every anonymous turn.
+            if ident.platform and f"{ident.platform}:*" in self.users:
+                return self.users[f"{ident.platform}:*"]
             return self.default_tier
         if ident.key in self.users:  # an explicit per-user entry always wins
             return self.users[ident.key]
         if self.gateway_admin_tier and self.is_gateway_admin(ident):
             return self.gateway_admin_tier
+        if self.home_channel_tier and self.is_home_channel_person(ident):
+            return self.home_channel_tier
         for key in (f"{ident.platform}:*", "*"):
             if key in self.users:
                 return self.users[key]
@@ -141,6 +161,18 @@ class Policy:
         else:
             ids = dm if dm and not group else group
         return ident.user_id in ids
+
+    def is_home_channel_person(self, ident: Identity) -> bool:
+        """Whether the sender is the person at this platform's configured home channel: their user id is
+        the home chat id (or the home's recorded user id), or this is a DM in the home chat itself."""
+        if ident.kind != "gateway" or not ident.user_id:
+            return False
+        ids = self.home_channels.get(ident.platform, frozenset())
+        if not ids:
+            return False
+        if ident.user_id in ids:
+            return True
+        return ident.chat_type in DM_CHAT_TYPES and bool(ident.chat_id) and ident.chat_id in ids
 
     def tier_for(self, ident: Identity) -> Tier:
         return self.tier_named(self.tier_name_for(ident))
@@ -257,6 +289,7 @@ def normalize_user_key(key: Any) -> str | None:
 def build_policy(
     get: Callable[[str, Any], Any],
     gateway_admins: Callable[[], Mapping[str, Iterable[str]]] | None = None,
+    home_channels: Callable[[], Mapping[str, Iterable[str]]] | None = None,
 ) -> Policy:
     warnings: list[str] = []
     tiers = build_tiers(get("tiers", None), warnings)
@@ -289,7 +322,7 @@ def build_policy(
     if admin_tier in ("off", "none", "false", "no"):
         admin_tier = ""
     if admin_tier and admin_tier not in tiers:
-        warnings.append(f"gateway_admin_tier {admin_tier!r} is not a tier; Hermes admins get no tier of their own")
+        warnings.append(f"gateway_admin_tier {admin_tier!r} is not a tier; gateway admins get no tier of their own")
         admin_tier = ""
     admins: dict[str, frozenset[str]] = {}
     if admin_tier and gateway_admins is not None:
@@ -299,7 +332,25 @@ def build_policy(
                 if clean:
                     admins[str(scope_key).lower()] = clean
         except Exception as exc:  # unreadable gateway config: promote nobody (fail closed)
-            warnings.append(f"could not read Hermes allow_admin_from ({type(exc).__name__}); no automatic admins")
+            warnings.append(f"could not read the gateway's allow_admin_from ({type(exc).__name__}); no automatic admins")
+
+    home_tier = str(get("home_channel_tier", "") or "").strip().lower()
+    if home_tier in ("off", "none", "false", "no"):
+        home_tier = ""
+    if home_tier and home_tier not in tiers:
+        warnings.append(f"home_channel_tier {home_tier!r} is not a tier; home channels get no tier of their own")
+        home_tier = ""
+    home_platforms = {p.lower() for p in _as_list(get("home_channel_platforms", None))}
+    homes: dict[str, frozenset[str]] = {}
+    if home_tier and home_platforms and home_channels is not None:
+        try:
+            for platform, ids in (home_channels() or {}).items():
+                platform = str(platform).strip().lower()
+                clean = frozenset(str(i).strip() for i in ids if str(i).strip())
+                if platform in home_platforms and clean:
+                    homes[platform] = clean
+        except Exception as exc:  # unreadable gateway config: promote nobody (fail closed)
+            warnings.append(f"could not read the gateway's home channels ({type(exc).__name__}); no home channel tier")
 
     return Policy(
         tiers=tiers,
@@ -309,6 +360,8 @@ def build_policy(
         cron_tier=_tier_setting("cron_tier", "owner"),
         gateway_admins=admins,
         gateway_admin_tier=admin_tier,
+        home_channels=homes,
+        home_channel_tier=home_tier if homes else "",
         warnings=warnings,
     )
 
@@ -317,21 +370,27 @@ def build_policy(
 
 
 def make_identity(
-    platform: str, user_id: str, user_name: str = "", *, cron: bool = False, chat_type: str = ""
+    platform: str, user_id: str, user_name: str = "", *, cron: bool = False, chat_type: str = "",
+    source: str = "", chat_id: str = "",
 ) -> Identity:
     platform = (platform or "").strip().lower()
     user_id = (user_id or "").strip()
     chat_type = (chat_type or "").strip().lower()
+    source = (source or "").strip().lower()
+    chat_id = (chat_id or "").strip()
     if cron:
         return Identity("cron", "cron", platform, user_id, user_name)
-    if platform in LOCAL_PLATFORMS and not user_id:
-        return Identity("local", "local", platform, "", user_name)
     if not user_id:
-        # A gateway turn without a sender id: never guess, fall to default_tier.
-        return Identity("unknown", f"{platform or 'gateway'}:?", platform, "", user_name)
+        if platform in LOCAL_PLATFORMS or (not platform and source in LOCAL_SOURCES):
+            return Identity("local", "local", platform or source, "", user_name)
+        if not platform and source in AUTOMATION_SOURCES:
+            return Identity("cron", source, source, "", user_name)
+        # A gateway turn without a sender id, or a turn with no platform and no local source: never guess,
+        # fall to default_tier.
+        return Identity("unknown", f"{platform or source or 'unlabelled'}:?", platform, "", user_name, chat_type, chat_id)
     # Webhook routes already carry their platform ("webhook:github"): don't double it.
     uid = user_id[len(platform) + 1:] if user_id.lower().startswith(platform + ":") else user_id
-    return Identity("gateway", f"{platform}:{uid}", platform, uid, user_name, chat_type)
+    return Identity("gateway", f"{platform}:{uid}", platform, uid, user_name, chat_type, chat_id)
 
 
 def describe_tier(tier: Tier) -> str:

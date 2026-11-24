@@ -84,7 +84,9 @@ class Commands:
         )
         via = ""
         if ident.key not in policy.users and policy.gateway_admin_tier and policy.is_gateway_admin(ident):
-            via = " (Hermes admin: allow_admin_from)"
+            via = " (gateway admin: allow_admin_from)"
+        elif ident.key not in policy.users and policy.home_channel_tier and policy.is_home_channel_person(ident):
+            via = " (home channel)"
         return f"You are {ident.label()}.\nTier: {tier.name}{via}\nTools: {describe_tier(tier)}\nRate: {rate}"
 
     def _tiers(self) -> str:
@@ -107,11 +109,14 @@ class Commands:
             rows = sorted(policy.users.items(), key=lambda kv: (_tier_sort_key(kv[1]), kv[0]))
             lines += ["Users:"] + [f"  {k} -> {v}" for k, v in rows]
         if policy.gateway_admin_tier and policy.gateway_admins:
-            lines.append(f"Hermes admins (allow_admin_from) -> {policy.gateway_admin_tier} unless listed above:")
+            lines.append(f"Gateway admins (allow_admin_from) -> {policy.gateway_admin_tier} unless listed above:")
             for scope_key in sorted(policy.gateway_admins):
                 platform, _, scope = scope_key.partition(":")
                 ids = ", ".join(f"{platform}:{i}" for i in sorted(policy.gateway_admins[scope_key]))
                 lines.append(f"  {scope} chats: {ids}")
+        if policy.home_channel_tier and policy.home_channels:
+            platforms = ", ".join(sorted(policy.home_channels))
+            lines.append(f"Home channel person ({platforms}) -> {policy.home_channel_tier} unless listed above.")
         if not lines:
             return f"No users assigned. Everyone on a messaging platform is {policy.default_tier}."
         return "\n".join(lines)

@@ -59,13 +59,18 @@ except for local sessions.
 Who gets which tier:
 
 - **Unassigned senders** on any messaging platform or webhook → `default_tier` (`guest`).
-- **Local sessions** (CLI, TUI, Desktop, ACP) → `local_tier` (`owner`).
-- **Cron jobs** → `cron_tier` (`owner`). Only tiers that may use `cronjob_manage` can create them.
-- A gateway turn **without a sender id** is never guessed: it gets `default_tier`.
+- **Local sessions** (CLI, TUI, Desktop, ACP) → `local_tier` (`owner`). The session's platform or
+  source must name the surface; a turn with no platform, no source and no sender is never guessed
+  to be local and gets `default_tier`.
+- **Cron jobs** and **Kanban workers** → `cron_tier` (`owner`). Only tiers that may use `cronjob_manage` can create them.
+- A gateway turn **without a sender id** is never guessed: it gets `default_tier`, unless `users`
+  has a platform-wide entry for it (`"api_server:*": owner` for an authenticated private API).
+- **The home channel's person** → `home_channel_tier` (off by default) on the platforms listed in
+  `home_channel_platforms`, so a workspace's owner is recognised from the home channel the operator set.
 
 Groups usable in `allow` / `deny`: `@web`, `@vision`, `@media`, `@read`, `@write`, `@shell`,
 `@browser`, `@memory`, `@skills`, `@skills_write`, `@schedule`, `@delegate`, `@mcp`, `@desktop`,
-`@chat`. Anything else is a tool name or glob (`mcp__github__*`).
+`@chat`, `@composio` (`mcp__composio__*`, connected apps acting on the owner's accounts). Anything else is a tool name or glob (`mcp__github__*`).
 
 ## Install
 

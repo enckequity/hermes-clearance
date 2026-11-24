@@ -38,16 +38,19 @@ DRIVER = textwrap.dedent(
 
     from hermes_cli.plugins import get_plugin_command_handler
 
-    def call(platform, uid, label, chat_type="group"):
-        tokens = set_session_vars(platform=platform, user_id=uid, user_name=label, chat_id="-1", chat_type=chat_type)
+    def call(platform, uid, label, chat_type="group", source=""):
+        tokens = set_session_vars(platform=platform, user_id=uid, user_name=label, chat_id="-1", chat_type=chat_type,
+                                  source=source)
         try:
             return model_tools.handle_function_call("terminal", {"command": "echo clearance-ran"}, task_id="t-" + label)
         finally:
             clear_session_vars(tokens)
 
     out = {}
-    for label, platform, uid in (("guest", "telegram", "2002"), ("admin", "telegram", "1001"), ("local", "", "")):
+    for label, platform, uid in (("guest", "telegram", "2002"), ("admin", "telegram", "1001")):
         out[label] = call(platform, uid, label)
+    out["local"] = call("", "", "local", source="cli")
+    out["unlabelled"] = call("", "", "unlabelled")
 
     # Hermes's own allow_admin_from (DM scope) makes 3003 owner in DMs only, with no Clearance entry.
     out["hermes_admin_dm"] = call("telegram", "3003", "hermes_admin_dm", chat_type="dm")
@@ -89,6 +92,7 @@ def test_real_dispatch_blocks_guest_and_allows_admin(tmp_path):
     assert "[clearance]" in out["guest"] and "clearance-ran" not in out["guest"]
     assert "clearance-ran" in out["admin"]
     assert "clearance-ran" in out["local"]
+    assert "[clearance]" in out["unlabelled"] and "clearance-ran" not in out["unlabelled"]  # never guessed local
     assert "clearance-ran" in out["hermes_admin_dm"]  # allow_admin_from recognised through Hermes's loader
     assert "[clearance]" in out["hermes_admin_group"] and "clearance-ran" not in out["hermes_admin_group"]
     assert out["set"] == "telegram:2002 is now admin." and "clearance-ran" in out["promoted"]

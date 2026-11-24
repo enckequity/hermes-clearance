@@ -47,8 +47,13 @@ def make_rt(tmp_path: Path, ident, admins=None, **settings):
         audit_path=lambda: tmp_path / "audit.jsonl",
         clock=clock,
         gateway_admins=lambda: holder["admins"],
+        home_channels=lambda: {},
     )
     return rt, cfg, clock, holder
+
+
+def _getter(settings):
+    return lambda key, default=None: settings.get(key, default)
 
 
 GUEST = make_identity("telegram", "222", "Guest Gina")
@@ -60,7 +65,13 @@ LOCAL = make_identity("cli", "")
 
 
 def test_identity_kinds():
-    assert make_identity("", "").kind == "local"
+    # No platform, no source and no sender is never guessed to be local (TeamShift #4635).
+    assert make_identity("", "").kind == "unknown"
+    assert make_identity("", "", source="cli").kind == "local"
+    assert make_identity("", "", source="tui").key == "local"
+    assert make_identity("", "", source="kanban").kind == "cron"
+    assert make_identity("", "", source="telegram").kind == "unknown"
+    assert make_identity("api_server", "").kind == "unknown"
     assert make_identity("desktop", "").key == "local"
     assert make_identity("telegram", "").kind == "unknown"
     assert make_identity("telegram", "", cron=True).kind == "cron"
@@ -360,3 +371,52 @@ def test_hermes_admin_can_manage_and_sees_why(tmp_path):
     assert "dm chats: telegram:777" in cmds.handle("users", source=Src())
     Src.chat_type = "group"
     assert cmds.handle("set telegram:2002 admin", source=Src()).startswith("Only the owner")
+
+
+# ------------------------------------------- unlabelled turns, home channels, Composio (TeamShift #4635)
+
+
+def test_unlabelled_turn_gets_default_tier_not_owner():
+    pol = build_policy(_getter({}))
+    assert pol.tier_name_for(make_identity("", "")) == "guest"
+    assert not pol.decide(make_identity("", ""), "terminal").allowed
+    assert pol.decide(make_identity("", "", source="cli"), "terminal").allowed
+
+
+def test_anonymous_platform_only_matches_its_own_wildcard():
+    pol = build_policy(_getter({"users": {"api_server:*": "owner", "*": "admin"}}))
+    assert pol.tier_name_for(make_identity("api_server", "")) == "owner"
+    assert pol.tier_name_for(make_identity("", "")) == "guest"
+    assert pol.tier_name_for(make_identity("webhook", "")) == "guest"
+
+
+def test_home_channel_person_gets_home_tier_only_on_listed_platforms():
+    homes = lambda: {"relay": ["+15550001"], "telegram": ["42"]}
+    cfg = {"home_channel_tier": "owner", "home_channel_platforms": ["relay"]}
+    pol = build_policy(_getter(cfg), None, homes)
+    assert pol.tier_name_for(make_identity("relay", "+15550001", chat_type="group")) == "owner"
+    assert pol.tier_name_for(make_identity("relay", "+15550002", chat_type="dm")) == "guest"
+    assert pol.tier_name_for(make_identity("relay", "+15550002", chat_type="dm", chat_id="+15550001")) == "owner"
+    assert pol.tier_name_for(make_identity("relay", "+15550002", chat_type="group", chat_id="+15550001")) == "guest"
+    assert pol.tier_name_for(make_identity("telegram", "42", chat_type="dm")) == "guest"
+    # Off unless both settings are given; an explicit users entry still wins.
+    assert build_policy(_getter({"home_channel_platforms": ["relay"]}), None, homes).tier_name_for(
+        make_identity("relay", "+15550001")) == "guest"
+    pinned = build_policy(_getter(dict(cfg, users={"relay:+15550001": "user"})), None, homes)
+    assert pinned.tier_name_for(make_identity("relay", "+15550001")) == "user"
+
+
+def test_unreadable_home_channels_promote_nobody():
+    def boom():
+        raise RuntimeError("bad config")
+    pol = build_policy(_getter({"home_channel_tier": "owner", "home_channel_platforms": ["relay"]}), None, boom)
+    assert pol.tier_name_for(make_identity("relay", "+15550001")) == "guest"
+    assert any("home channels" in w for w in pol.warnings)
+
+
+def test_composio_group_grants_connected_app_tools():
+    staff = make_identity("relay", "+15550003")
+    pol = build_policy(_getter({"users": {"relay:+15550003": "user"}, "tiers": {"user": {"allow": ["@chat", "@composio"]}}}))
+    assert pol.decide(staff, "mcp__composio__GMAIL_SEND_EMAIL").allowed
+    assert not pol.decide(staff, "mcp__github__create_issue").allowed
+    assert not build_policy(_getter({"users": {"relay:+15550003": "user"}})).decide(staff, "mcp__composio__GMAIL_SEND_EMAIL").allowed
